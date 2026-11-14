@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-MODEL = os.getenv("MODEL", "gemini-2.5-flash")
+MODEL = os.getenv("MODEL", "gemini-3.8-flash")
 client = genai.Client()  # reads GEMINI_API_KEY
 app = FastAPI()
 
