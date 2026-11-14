@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Study Coach</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Literata:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f3f6f4;--surface:#fff;--ink:#16302b;--muted:#5d7a73;--line:#cfdcd7;--accent:#0f766e;--ok:#15803d;--bad:#b91c1c;--bar:#d7e5e0}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1a18;--surface:#16262a;--ink:#e4f0ed;--muted:#93b0a8;--line:#2a403c;--accent:#2dd4bf;--ok:#4ade80;--bad:#f87171;--bar:#25403b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 "Atkinson Hyperlegible",system-ui,sans-serif}
+h1,h2,.q{font-family:Literata,Georgia,serif}
+main{max-width:1000px;margin:0 auto;padding:28px 18px 60px}
+h1{font-size:2rem;margin:0 0 4px}.sub{color:var(--muted);margin:0 0 24px}
+.layout{display:grid;grid-template-columns:1fr 320px;gap:22px}
+@media(max-width:800px){.layout{grid-template-columns:1fr}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:20px}
+label{display:block;font-weight:700;margin:14px 0 4px}
+input,textarea,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:90px}
+button{font:inherit;font-weight:700;padding:11px 18px;border-radius:6px;border:0;background:var(--accent);color:#fff;cursor:pointer;margin-top:16px}
+@media(prefers-color-scheme:dark){button{color:#08201c}}
+button:disabled{opacity:.5;cursor:wait}
+button:focus-visible,input:focus-visible,textarea:focus-visible,.opt:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.q{font-size:1.25rem;margin:6px 0 14px}
+.opt{display:block;width:100%;text-align:left;background:var(--bg);color:var(--ink);border:2px solid var(--line);margin:8px 0;font-weight:400}
+.opt.right{border-color:var(--ok)}.opt.wrong{border-color:var(--bad)}
+.exp{border-left:4px solid var(--accent);padding:4px 12px;margin-top:14px;background:var(--bg)}
+.tag{color:var(--muted);font-size:.9rem}
+.row{margin:12px 0}.row .n{display:flex;justify-content:space-between;font-size:.95rem}
+.bar{height:9px;border-radius:5px;background:var(--bar);overflow:hidden;margin-top:4px}
+.bar i{display:block;height:100%;background:var(--accent);transition:width .4s}
+.err{color:var(--bad);margin-top:10px}.hide{display:none}
+@media(prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head>
+<body>
+<main>
+<h1>Study Coach</h1>
+<p class="sub">Any subject, any curriculum. It finds what you don't know yet and asks about that.</p>
+
+<section id="setup" class="panel">
+  <label for="subject">Subject</label><input id="subject" placeholder="e.g. Biology, Algorithms, Macroeconomics">
+  <label for="level">Level or curriculum</label><input id="level" placeholder="e.g. KCSE, CBC Grade 8, IGCSE, IB HL, university year 2">
+  <label for="lang">Language</label>
+  <select id="lang"><option>English</option><option>Kiswahili</option><option>Français</option><option>Español</option><option>한국어</option></select>
+  <label for="notes">Your notes (optional). Questions will come only from these.</label><textarea id="notes"></textarea>
+  <button id="start">Build my study plan</button><div id="serr" class="err"></div>
+</section>
+
+<div id="app" class="layout hide">
+  <section class="panel" id="quiz" aria-live="polite"></section>
+  <aside class="panel"><h2 style="margin-top:0;font-size:1.1rem">Mastery</h2><div id="dash"></div></aside>
+</div>
+</main>
+
+<script>
+// ---- Bayesian Knowledge Tracing + prerequisite-aware selection (same as simulate.py) ----
+const P_INIT=.2,P_LEARN=.15,P_GUESS=.25,P_SLIP=.1,MASTERED=.9,READY=.6;
+const bkt=(p,ok)=>{const post=ok?p*(1-P_SLIP)/(p*(1-P_SLIP)+(1-p)*P_GUESS):p*P_SLIP/(p*P_SLIP+(1-p)*(1-P_GUESS));return post+(1-post)*P_LEARN};
+let S={concepts:[],belief:{},last:null,asked:[],cfg:{},q:null,count:0};
+const $=id=>document.getElementById(id);
+const byId=id=>S.concepts.find(c=>c.id===id);
+
+function pickNext(){
+  const b=S.belief,L=S.last;
+  if(L&&!L.ok){const pre=byId(L.id).prereqs;if(pre.length){const w=pre.reduce((a,c)=>b[c]<b[a]?c:a);if(b[w]<READY)return w}}
+  const todo=S.concepts.filter(c=>b[c.id]<MASTERED);
+  if(!todo.length)return null;
+  const ready=todo.filter(c=>c.prereqs.every(p=>b[p]>=READY));
+  const pool=ready.length?ready:todo;
+  return pool.reduce((a,c)=>Math.abs(b[c.id]-.5)<Math.abs(b[a.id]-.5)?c:a).id;
+}
+
+async function api(path,body){
+  const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!r.ok)throw new Error((await r.json()).detail||"Request failed");return r.json();
+}
+
+$("start").onclick=async()=>{
+  const cfg={subject:$("subject").value.trim(),level:$("level").value.trim(),notes:$("notes").value,language:$("lang").value};
+  if(!cfg.subject||!cfg.level){$("serr").textContent="Enter a subject and a level.";return}
+  $("start").disabled=true;$("serr").textContent="Building your topic map...";
+  try{
+    const d=await api("/api/map",cfg);
+    S={concepts:d.concepts,belief:Object.fromEntries(d.concepts.map(c=>[c.id,P_INIT])),last:null,asked:[],cfg,q:null,count:0};
+    $("setup").classList.add("hide");$("app").classList.remove("hide");render();nextQuestion();
+  }catch(e){$("serr").textContent=e.message}finally{$("start").disabled=false}
+};
+
+async function nextQuestion(){
+  const id=pickNext();
+  if(!id){$("quiz").innerHTML=`<h2>All concepts mastered</h2><p>You answered ${S.count} questions. Nice work.</p>`;return}
+  const c=byId(id),b=S.belief[id];
+  $("quiz").innerHTML=`<p class="tag">Preparing a question on ${esc(c.name)}...</p>`;
+  try{
+    const q=await api("/api/question",{...S.cfg,concept:c.name,difficulty:b<.35?"easy":b<.7?"medium":"hard",avoid:S.asked});
+    S.q={...q,id};S.asked.push(q.question);showQ(c)
+  }catch(e){$("quiz").innerHTML=`<p class="err">${esc(e.message)}</p><button id="retry">Try again</button>`;$("retry").onclick=nextQuestion}
+}
+
+function showQ(c){
+  const q=S.q;
+  $("quiz").innerHTML=`<p class="tag">Concept: ${esc(c.name)} &middot; question ${S.count+1}</p><p class="q">${esc(q.question)}</p>`+
+    q.options.map((o,i)=>`<button class="opt" data-i="${i}">${esc(o)}</button>`).join("")+`<div id="fb"></div>`;
+  document.querySelectorAll(".opt").forEach(b=>b.onclick=()=>answer(+b.dataset.i));
+}
+
+function answer(i){
+  const q=S.q,ok=i===q.answer_index;
+  document.querySelectorAll(".opt").forEach((b,j)=>{b.disabled=true;b.style.cursor="default";if(j===q.answer_index)b.classList.add("right");else if(j===i)b.classList.add("wrong")});
+  S.belief[q.id]=bkt(S.belief[q.id],ok);S.last={id:q.id,ok};S.count++;render();
+  $("fb").innerHTML=`<div class="exp"><b>${ok?"Correct.":"Not quite."}</b> ${esc(q.explanation)}</div><button id="nx">Next question</button>`;
+  $("nx").onclick=nextQuestion;$("nx").focus();
+}
+
+function render(){
+  $("dash").innerHTML=S.concepts.map(c=>{const p=Math.round(S.belief[c.id]*100);
+    const locked=c.prereqs.some(x=>S.belief[x]<READY)&&p<50;
+    return `<div class="row"><div class="n"><span>${esc(c.name)}</span><span class="tag">${locked?"needs "+c.prereqs.filter(x=>S.belief[x]<READY).map(x=>esc(byId(x).name)).join(", "):p+"%"}</span></div><div class="bar"><i style="width:${p}%"></i></div></div>`}).join("");
+}
+const esc=s=>String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+</script>
+</body>
+</html>
